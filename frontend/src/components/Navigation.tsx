@@ -1,13 +1,14 @@
-import { Box, Tab, Tabs, Typography } from '@mui/material';
+import { Box, Button, Tab, Tabs, Typography } from '@mui/material';
 
 export type Page = 'job-leads' | 'linkedin-leads';
 
 interface NavigationProps {
   currentPage: Page;
   onNavigate: (page: Page) => void;
+  onLogout: () => void;
 }
 
-export function Navigation({ currentPage, onNavigate }: NavigationProps) {
+export function Navigation({ currentPage, onNavigate, onLogout }: NavigationProps) {
   const handleChange = (_: React.SyntheticEvent, value: Page) => {
     onNavigate(value);
   };
@@ -18,10 +19,13 @@ export function Navigation({ currentPage, onNavigate }: NavigationProps) {
         <Typography variant="subtitle2" sx={{ fontWeight: 700, color: 'text.secondary', whiteSpace: 'nowrap', py: 1.5 }}>
           n8n Leads
         </Typography>
-        <Tabs value={currentPage} onChange={handleChange} sx={{ minHeight: 48 }}>
+        <Tabs value={currentPage} onChange={handleChange} sx={{ minHeight: 48, flexGrow: 1 }}>
           <Tab label="Job Leads" value="job-leads" sx={{ minHeight: 48, textTransform: 'none', fontWeight: 600 }} />
           <Tab label="LinkedIn Leads" value="linkedin-leads" sx={{ minHeight: 48, textTransform: 'none', fontWeight: 600 }} />
         </Tabs>
+        <Button size="small" onClick={onLogout} sx={{ textTransform: 'none', color: 'text.secondary' }}>
+          Sign out
+        </Button>
       </Box>
     </Box>
   );

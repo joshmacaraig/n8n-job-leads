@@ -1,6 +1,7 @@
 // Update whether a job lead is already applied
 query "job_leads/mark_applied" verb=PATCH {
   api_group = "Job Leads"
+  auth = "user"
 
   input {
     int id

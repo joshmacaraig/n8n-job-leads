@@ -1,6 +1,7 @@
 // List all LinkedIn leads with pagination
 query linkedin_leads verb=GET {
   api_group = "Job Leads"
+  auth = "user"
 
   input {
     int page?=1 filters=min:1

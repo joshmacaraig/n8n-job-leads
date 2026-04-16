@@ -1,6 +1,7 @@
 // List all job leads with pagination
 query job_leads verb=GET {
   api_group = "Job Leads"
+  auth = "user"
 
   input {
     int page?=1 filters=min:1
