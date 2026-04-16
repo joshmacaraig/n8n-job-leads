@@ -1,0 +1,224 @@
+{
+  "name": "LinkedIn Leads Scraper",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      },
+      "id": "node-schedule",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "searchUrl",
+              "value": "https://www.linkedin.com/search/results/people/?keywords=CTO+OR+Founder+OR+%22Head+of+Product%22+startup&origin=GLOBAL_SEARCH_HEADER"
+            },
+            {
+              "name": "maxResults",
+              "value": "50"
+            }
+          ]
+        }
+      },
+      "id": "node-set-params",
+      "name": "Set Search Params",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "actorId": "anchor/linkedin-profile-scraper",
+        "runSync": true,
+        "input": {
+          "startUrls": [
+            {
+              "url": "={{ $json.searchUrl }}"
+            }
+          ],
+          "maxResults": "={{ $json.maxResults }}",
+          "proxy": {
+            "useApifyProxy": true,
+            "apifyProxyGroups": ["RESIDENTIAL"]
+          }
+        },
+        "options": {}
+      },
+      "id": "node-apify-run",
+      "name": "Apify: Run Scraper",
+      "type": "n8n-nodes-base.apify",
+      "typeVersion": 1,
+      "position": [640, 300],
+      "credentials": {
+        "apifyApi": {
+          "id": "apify-creds",
+          "name": "Apify account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "datasetId": "={{ $json.defaultDatasetId }}",
+        "options": {}
+      },
+      "id": "node-apify-dataset",
+      "name": "Apify: Get Results",
+      "type": "n8n-nodes-base.apify",
+      "typeVersion": 1,
+      "position": [860, 300],
+      "credentials": {
+        "apifyApi": {
+          "id": "apify-creds",
+          "name": "Apify account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "name",
+              "value": "={{ $json.fullName ?? ($json.firstName + ' ' + $json.lastName) }}"
+            },
+            {
+              "name": "linkedin_url",
+              "value": "={{ $json.linkedinUrl ?? $json.url ?? $json.profileUrl }}"
+            }
+          ]
+        },
+        "options": {
+          "dotNotation": false
+        }
+      },
+      "id": "node-normalize",
+      "name": "Normalize Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1080, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.name }}",
+              "operation": "isNotEmpty"
+            },
+            {
+              "value1": "={{ $json.linkedin_url }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "node-filter",
+      "name": "Filter: Has Name & URL",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 1,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://x8ki-letl-twmt.n7.xano.io/api:quJrPncv/linkedin_leads",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "name": "={{ $json.name }}",
+          "linkedin_url": "={{ $json.linkedin_url }}"
+        },
+        "options": {}
+      },
+      "id": "node-xano-post",
+      "name": "Xano: Save Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1520, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Search Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Search Params": {
+      "main": [
+        [
+          {
+            "node": "Apify: Run Scraper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apify: Run Scraper": {
+      "main": [
+        [
+          {
+            "node": "Apify: Get Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apify: Get Results": {
+      "main": [
+        [
+          {
+            "node": "Normalize Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Fields": {
+      "main": [
+        [
+          {
+            "node": "Filter: Has Name & URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter: Has Name & URL": {
+      "main": [
+        [
+          {
+            "node": "Xano: Save Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

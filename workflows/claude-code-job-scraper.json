@@ -1,0 +1,353 @@
+{
+  "name": "Claude Code Job Scraper",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 24 }]
+        }
+      },
+      "id": "node-schedule-trigger",
+      "name": "Daily Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-date-found",
+              "name": "dateFound",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "node-set-config",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://weworkremotely.com/remote-jobs.rss",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": { "response": { "responseFormat": "text" } }
+        }
+      },
+      "id": "node-wwr",
+      "name": "Scrape WWR RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst xmlText = (typeof raw === 'string' ? raw : JSON.stringify(raw)) || '';\n\nif (!xmlText.includes('<item')) return [{ json: { _empty: true } }];\n\nconst itemRegex = /<item[^>]*>([\\s\\S]*?)<\\/item>/gi;\nconst titleRegex = /<title[^>]*>(?:<!\\[CDATA\\[)?(.*?)(?:\\]\\]>)?<\\/title>/i;\nconst linkRegex = /<link>([\\s\\S]*?)<\\/link>/i;\nconst descRegex = /<description[^>]*>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/description>/i;\n\nconst results = [];\nlet match;\n\nwhile ((match = itemRegex.exec(xmlText)) !== null) {\n  const xml = match[1];\n  const title = (titleRegex.exec(xml)?.[1] || '').trim();\n  const link  = (linkRegex.exec(xml)?.[1] || '').trim();\n  const desc  = (descRegex.exec(xml)?.[1] || '').replace(/<[^>]*>/g, '').trim();\n\n  if (!title) continue;\n\n  const combined = (title + ' ' + desc).toLowerCase();\n  // Decode HTML entities before matching to avoid false positives on CSS class names\n  const decoded = combined.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&quot;/g,'\"');\n  // Strip any remaining tags after decode\n  const clean = decoded.replace(/<[^>]*>/g, ' ');\n  const keywords = ['claude code', 'claude coding', 'anthropic claude', 'claude ai'];\n  if (!keywords.some(kw => clean.includes(kw))) continue;\n\n  const rawId = link.replace(/[^a-z0-9]/gi, '').substring(0, 40);\n\n  results.push({\n    title,\n    source: 'WeWorkRemotely',\n    url: link,\n    description: desc.substring(0, 500),\n    date_found: new Date().toISOString(),\n    company: null,\n    dedup_key: 'wwr_' + rawId\n  });\n}\n\nif (results.length === 0) return [{ json: { _empty: true } }];\nreturn results.map(r => ({ json: r }));"
+      },
+      "id": "node-parse-wwr",
+      "name": "Parse WWR RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 180]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.onlinejobs.ph/jobseekers/jobsearch",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "jobkeyword", "value": "claude code" },
+            { "name": "jobtype", "value": "1" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+            { "name": "Accept-Language", "value": "en-US,en;q=0.5" }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": { "response": { "responseFormat": "text" } }
+        }
+      },
+      "id": "node-onlinejobs",
+      "name": "Scrape OnlineJobs.ph",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 420]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst html = (typeof raw === 'string' ? raw : (raw.data || JSON.stringify(raw))) || '';\n\nif (!html.includes('/jobseekers/job/')) return [{ json: { _empty: true } }];\n\nconst results = [];\nconst seen = new Set();\n\n// Split HTML by job anchor links — each chunk starts with the URL slug\nconst chunks = html.split('<a href=\"/jobseekers/job/');\n\nfor (let i = 1; i < chunks.length; i++) {\n  const chunk = chunks[i];\n\n  // Extract URL slug (everything up to the closing quote)\n  const slugMatch = chunk.match(/^([^\"]+)\"/);\n  if (!slugMatch) continue;\n  const slug = slugMatch[1];\n\n  if (seen.has(slug)) continue;\n  seen.add(slug);\n\n  // Extract title from <h4> — strip nested <span> badges\n  const titleMatch = chunk.match(/<h4[^>]*>([\\s\\S]*?)<\\/h4>/i);\n  if (!titleMatch) continue;\n  const title = titleMatch[1].replace(/<[^>]*>/g, '').replace(/\\s+/g, ' ').trim();\n  if (!title) continue;\n\n  // Extract short description snippet\n  const descMatch = chunk.match(/<div[^>]*class=\"[^\"]*desc[^\"]*\"[^>]*>([\\s\\S]*?)<\\/div>/i);\n  const desc = descMatch\n    ? descMatch[1].replace(/<[^>]*>/g, '').replace(/\\s+/g, ' ').trim().substring(0, 500)\n    : null;\n\n  // Extract salary\n  const salaryMatch = chunk.match(/<dd[^>]*class=\"col\"[^>]*>([\\s\\S]*?)<\\/dd>/i);\n  const salary = salaryMatch ? salaryMatch[1].replace(/<[^>]*>/g, '').trim() : null;\n\n  const url = 'https://www.onlinejobs.ph/jobseekers/job/' + slug;\n  const rawId = slug.replace(/[^a-z0-9]/gi, '').substring(0, 40);\n\n  results.push({\n    title,\n    source: 'OnlineJobsPH',\n    url,\n    description: salary && desc\n      ? `Salary: ${salary} | ${desc}`\n      : (desc || salary || null),\n    date_found: new Date().toISOString(),\n    company: null,\n    dedup_key: 'ojph_' + rawId\n  });\n}\n\nif (results.length === 0) return [{ json: { _empty: true } }];\nreturn results.map(r => ({ json: r }));"
+      },
+      "id": "node-parse-onlinejobs",
+      "name": "Parse OnlineJobs.ph",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 420]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\nconst leads = [];\n\nfor (const item of allItems) {\n  const d = item.json;\n  if (d._empty === true) continue;\n  if (!d.title || !d.source || !d.url || !d.dedup_key) continue;\n  leads.push(d);\n}\n\nif (leads.length === 0) {\n  return [{ json: { _no_leads: true, message: 'No relevant leads found this run.' } }];\n}\n\nreturn leads.map(l => ({ json: l }));"
+      },
+      "id": "node-collect-all",
+      "name": "Collect All Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "id": "cond-no-leads",
+              "leftValue": "={{ $json._no_leads }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-has-leads",
+      "name": "Has Leads?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collapse all incoming lead items into a single trigger item\n// so that Fetch Existing Dedup Keys only runs once (prevents 429 rate limit)\nreturn [{ json: { _trigger: true } }];"
+      },
+      "id": "node-aggregate-trigger",
+      "name": "Aggregate for Fetch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 60]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://x8ki-letl-twmt.n7.xano.io/api:quJrPncv/job_leads",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "per_page", "value": "500" }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "node-fetch-existing",
+      "name": "Fetch Existing Dedup Keys from Xano",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1440, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const xanoRecords = $input.first().json;\nconst records = Array.isArray(xanoRecords)\n  ? xanoRecords\n  : (xanoRecords.items || xanoRecords.data || []);\n\nconst existingKeys = new Set(records.map(r => r.dedup_key).filter(Boolean));\nreturn [{ json: { existingKeys: Array.from(existingKeys) } }];"
+      },
+      "id": "node-build-keyset",
+      "name": "Build Existing Key Set",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 180]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "id": "node-merge-for-dedup",
+      "name": "Merge: New Leads + Key Set",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1920, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const newLeadItems = $input.all().filter(i => i.json.dedup_key !== undefined);\nconst keySetItem = $input.all().find(i => i.json.existingKeys !== undefined);\n\nconst existingKeys = new Set(\n  keySetItem ? (keySetItem.json.existingKeys || []) : []\n);\n\nconst seen = new Set();\nconst finalLeads = [];\n\nfor (const item of newLeadItems) {\n  const lead = item.json;\n  if (!lead.dedup_key) continue;\n  if (existingKeys.has(lead.dedup_key)) continue;\n  if (seen.has(lead.dedup_key)) continue;\n  seen.add(lead.dedup_key);\n  finalLeads.push(lead);\n}\n\nif (finalLeads.length === 0) {\n  return [{ json: { _all_duplicates: true, message: 'All leads are already in Xano.' } }];\n}\n\nreturn finalLeads.map(l => ({ json: l }));"
+      },
+      "id": "node-dedup",
+      "name": "Deduplicate Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2160, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "id": "cond-dupes",
+              "leftValue": "={{ $json._all_duplicates }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-check-after-dedup",
+      "name": "New Leads After Dedup?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2400, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all lead items into a single batch payload\nconst leads = $input.all().map(i => i.json);\nreturn [{ json: { leads } }];"
+      },
+      "id": "node-aggregate-batch",
+      "name": "Aggregate Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://x8ki-letl-twmt.n7.xano.io/api:quJrPncv/job_leads/batch",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"leads\": $json.leads } }}",
+        "options": {
+          "timeout": 30000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "node-post-xano",
+      "name": "POST Batch to Xano",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2880, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = $input.first().json;\nreturn [{\n  json: {\n    status: 'success',\n    leads_saved: res.saved_count ?? 0,\n    leads_skipped: res.skipped_count ?? 0,\n    run_at: new Date().toISOString(),\n    message: `Saved ${res.saved_count ?? 0} new Claude Code job lead(s) to Xano.`\n  }\n}];"
+      },
+      "id": "node-summary",
+      "name": "Run Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2880, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    status: 'no_new_leads',\n    run_at: new Date().toISOString(),\n    message: 'Run complete. No new Claude Code leads found or all were duplicates.'\n  }\n}];"
+      },
+      "id": "node-no-leads-log",
+      "name": "Log: No New Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 420]
+    }
+  ],
+  "connections": {
+    "Daily Trigger": {
+      "main": [[{ "node": "Set Config", "type": "main", "index": 0 }]]
+    },
+    "Set Config": {
+      "main": [[
+        { "node": "Scrape WWR RSS", "type": "main", "index": 0 },
+        { "node": "Scrape OnlineJobs.ph", "type": "main", "index": 0 }
+      ]]
+    },
+    "Scrape WWR RSS": {
+      "main": [[{ "node": "Parse WWR RSS", "type": "main", "index": 0 }]]
+    },
+    "Parse WWR RSS": {
+      "main": [[{ "node": "Collect All Leads", "type": "main", "index": 0 }]]
+    },
+    "Scrape OnlineJobs.ph": {
+      "main": [[{ "node": "Parse OnlineJobs.ph", "type": "main", "index": 0 }]]
+    },
+    "Parse OnlineJobs.ph": {
+      "main": [[{ "node": "Collect All Leads", "type": "main", "index": 0 }]]
+    },
+    "Collect All Leads": {
+      "main": [[{ "node": "Has Leads?", "type": "main", "index": 0 }]]
+    },
+    "Has Leads?": {
+      "main": [
+        [
+          { "node": "Aggregate for Fetch", "type": "main", "index": 0 },
+          { "node": "Merge: New Leads + Key Set", "type": "main", "index": 0 }
+        ],
+        [{ "node": "Log: No New Leads", "type": "main", "index": 0 }]
+      ]
+    },
+    "Aggregate for Fetch": {
+      "main": [[{ "node": "Fetch Existing Dedup Keys from Xano", "type": "main", "index": 0 }]]
+    },
+    "Fetch Existing Dedup Keys from Xano": {
+      "main": [[{ "node": "Build Existing Key Set", "type": "main", "index": 0 }]]
+    },
+    "Build Existing Key Set": {
+      "main": [[{ "node": "Merge: New Leads + Key Set", "type": "main", "index": 1 }]]
+    },
+    "Merge: New Leads + Key Set": {
+      "main": [[{ "node": "Deduplicate Leads", "type": "main", "index": 0 }]]
+    },
+    "Deduplicate Leads": {
+      "main": [[{ "node": "New Leads After Dedup?", "type": "main", "index": 0 }]]
+    },
+    "New Leads After Dedup?": {
+      "main": [
+        [{ "node": "Aggregate Batch", "type": "main", "index": 0 }],
+        [{ "node": "Log: No New Leads", "type": "main", "index": 0 }]
+      ]
+    },
+    "Aggregate Batch": {
+      "main": [[{ "node": "POST Batch to Xano", "type": "main", "index": 0 }]]
+    },
+    "POST Batch to Xano": {
+      "main": [[{ "node": "Run Summary", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["jobs", "scraper", "claude-code", "leads"],
+  "triggerCount": 1,
+  "updatedAt": "2026-04-11T00:00:00.000Z",
+  "versionId": "2"
+}
